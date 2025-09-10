@@ -1,0 +1,11 @@
+[package]
+name = "oprf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+group = "0.14.0-pre.0"
+digest = "0.11.0-rc.1"
+rand_core = "0.9.3"
+hash2curve = "0.14.0-rc.1"
+constcat = "0.6.1"
