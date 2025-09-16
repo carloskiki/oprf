@@ -1,17 +1,42 @@
+//! OPRF [`Server`] implementation.
+
 use group::{Group, ff::Field};
 use rand_core::RngCore;
 
 use crate::{
-    Blind, Evaluated, Proof, Suite, VerifyingKey, context_string, generate_proof, hash_to_scalar,
-    input::Input,
-    mode::{self, Mode},
+    Blind, Evaluated, Input, Proof, Suite, VerifyingKey, context_string, generate_proof,
+    hash_to_scalar,
+    mode::{self, GetVerifyingKey, Mode},
 };
 
-/// The server of the protocol.
+/// Server of the OPRF protocol.
+///
+/// The server holds a [`secret_key`], and evaluates blinded elements provided by the client.
+/// Depending on the [`mode`], it may also generate a [`Proof`] that the evaluation was done correctly,
+/// which the [`Client`] can verify using the server [`verifying_key`].
+///
+/// There are three distinct [`Server::evaluate`] methods, one for each [`mode`]:
+/// - [`Server<_, Base>::evaluate`][Base]
+/// - [`Server<_, Verifiable>::evaluate`][Verifiable]
+/// - [`Server<_, Partial>::evaluate`][Partial]
+///
+/// [`secret_key`]: Server::secret_key
+/// [`verifying_key`]: Server::verifying_key
+/// [`Client`]: crate::client::Client
+/// [Base]: #impl-Server<S,+Base>
+/// [Verifiable]: #impl-Server<S,+Verifiable>
+/// [Partial]: #impl-Server<S,+Partial>
 #[allow(private_bounds)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Server<S: Suite, M: Mode> {
     key: <S::Group as Group>::Scalar,
     payload: M::ServerPayload<S::Group>,
+}
+
+impl<S: Suite, M: Mode> zeroize::Zeroize for Server<S, M> {
+    fn zeroize(&mut self) {
+        self.key = <S::Group as Group>::Scalar::ZERO;
+    }
 }
 
 #[allow(private_bounds)]
@@ -55,20 +80,33 @@ impl<S: Suite, M: Mode> Server<S, M> {
             payload: crate::mode::_From::_from(&secret_key),
         })
     }
-}
 
-#[allow(private_bounds)]
-impl<S, M> Server<S, M>
-where
-    S: Suite,
-    M: Mode<ServerPayload<S::Group> = VerifyingKey<S::Group>>,
-{
+    /// Initialize a new server from the provided secret key.
+    ///
+    /// This is not defined in RFC 9497 and not recommended, but is an obvious constructor that
+    /// can be useful.
+    pub fn from_secret_key(key: <S::Group as Group>::Scalar) -> Self {
+        Server {
+            key,
+            payload: crate::mode::_From::_from(&key),
+        }
+    }
+
+    /// Access the server's secret key.
+    ///
+    /// Be careful with it!
+    pub fn secret_key(&self) -> &<S::Group as Group>::Scalar {
+        &self.key
+    }
+
     /// The verifying key of the server.
     ///
     /// This is only accessible in modes that produce a proof, i.e., `mode::Verifiable` and
     /// `mode::Partial`.
     pub fn verifying_key(&self) -> VerifyingKey<S::Group> {
         self.payload
+            .get_verifying_key()
+            .unwrap_or_else(|| VerifyingKey(S::Group::mul_by_generator(&self.key)))
     }
 }
 
@@ -78,58 +116,57 @@ impl<S: Suite> Server<S, mode::Base> {
     /// Corresponds to the [`BlindEvaluate`] method defined for OPRFs in RFC 9497.
     ///
     /// [`BlindEvaluate`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-4
-    pub fn evaluate(&self, Blind(blinded_element): Blind<S::Group>) -> Evaluated<S::Group>
+    pub fn evaluate<const N: usize>(
+        &self,
+        blinded_elements: [Blind<S::Group>; N],
+    ) -> [Evaluated<S::Group>; N]
 where {
-        let evaluated_element = blinded_element * self.key;
-        Evaluated(evaluated_element)
+        blinded_elements.map(|Blind(blinded_element)| Evaluated(blinded_element * self.key))
     }
 }
 
 impl<S: Suite> Server<S, mode::Verifiable> {
     /// Evaluate the blinded element and prove the evaluation.
     ///
-    /// The [`BlindEvaluate`] method defined for VOPRFs in RFC 9497. In contrast to the RFC, this
-    /// method also returns the verifying key, since it is computed during the proof generation.
+    /// The [`BlindEvaluate`] method defined for VOPRFs in RFC 9497.
     ///
     /// [`BlindEvaluate`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.2-2
-    pub fn evaluate_prove(
+    #[allow(clippy::type_complexity)]
+    pub fn evaluate<const N: usize>(
         &self,
-        Blind(blinded_element): Blind<S::Group>,
+        blinded_elements: [Blind<S::Group>; N],
         rng: &mut impl RngCore,
-    ) -> (Evaluated<S::Group>, Proof<<S::Group as Group>::Scalar>) {
-        let evaluated_element = Evaluated(blinded_element * self.key);
-        let blinded_elements = [blinded_element];
-        let evaluated_elements = [evaluated_element.0];
+    ) -> ([Evaluated<S::Group>; N], Proof<<S::Group as Group>::Scalar>) {
+        let evaluated_elements =
+            blinded_elements.map(|Blind(blinded_element)| Evaluated(blinded_element * self.key));
         let verifying_key = self.verifying_key();
-        let proof = generate_proof::<1, S, mode::Verifiable>(
+        let proof = generate_proof::<N, S, mode::Verifiable>(
             self.key,
             S::Group::generator(),
             verifying_key.0,
-            blinded_elements,
-            evaluated_elements,
+            blinded_elements.map(|Blind(b)| b),
+            evaluated_elements.map(|Evaluated(e)| e),
             rng,
         );
 
-        (evaluated_element, proof)
+        (evaluated_elements, proof)
     }
 }
 
 impl<S: Suite> Server<S, mode::Partial> {
     /// Evaluate the partially blinded element and prove the evaluation.
     ///
-    /// Evaluates a partially blinded element, and generates a proof that the evaluation  was done
-    /// with the server's private key and the shared information.
-    ///
     /// The [`BlindEvaluate`] method defined for POPRFs in RFC 9497.
     ///
     /// [`BlindEvaluate`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.3-4
     #[allow(clippy::type_complexity)]
-    pub fn evaluate_prove_partial(
+    pub fn evaluate<const N: usize>(
         &self,
-        blinded_element: Blind<S::Group>,
+        blinded_elements: [Blind<S::Group>; N],
         info: Input<'_>,
         rng: &mut impl RngCore,
-    ) -> Result<(Evaluated<S::Group>, Proof<<S::Group as Group>::Scalar>), UndefinedInverse> {
+    ) -> Result<([Evaluated<S::Group>; N], Proof<<S::Group as Group>::Scalar>), UndefinedInverse>
+    {
         let framed_info = [
             b"Info".as_slice(),
             &(info.as_ref().len() as u16).to_be_bytes(),
@@ -137,42 +174,62 @@ impl<S: Suite> Server<S, mode::Partial> {
         ];
         let m = hash_to_scalar::<S, mode::Partial>(&framed_info);
         let t = self.key + m;
+        let t_inv = t.invert().into_option().ok_or(UndefinedInverse)?;
 
-        let evaluated_element =
-            Evaluated(blinded_element.0 * t.invert().into_option().ok_or(UndefinedInverse)?);
+        let evaluated_elements =
+            blinded_elements.map(|Blind(blinded_element)| Evaluated(blinded_element * t_inv));
 
         let tweaked_key = S::Group::mul_by_generator(&t);
-        let evaluated_elements = [evaluated_element.0];
-        let blinded_elements = [blinded_element.0];
-        let proof = generate_proof::<1, S, mode::Partial>(
+        let proof = generate_proof::<N, S, mode::Partial>(
             t,
             S::Group::generator(),
             tweaked_key,
-            evaluated_elements,
-            blinded_elements,
+            evaluated_elements.map(|Evaluated(e)| e),
+            blinded_elements.map(|Blind(b)| b),
             rng,
         );
 
-        Ok((evaluated_element, proof))
+        Ok((evaluated_elements, proof))
     }
 }
 
 /// Deterministic server creation error.
 ///
-/// Creating a server with the provided `seed` and `info` results in an invalid private key.
+/// Creating a server with the provided `seed` and `info` results in an invalid secret key.
 /// This is practically impossible, and implies a broken `hash_to_scalar` or `PrimeField`
 /// implementation.
 ///
 /// Conforms with [Deterministic key generation] in RFC 9497.
 ///
 /// [Deterministic key generation]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.2.1
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvalidSeed;
+
+impl core::fmt::Display for InvalidSeed {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "the `seed` and `info` provided generate an invalid secret key"
+        )
+    }
+}
+
+impl core::error::Error for InvalidSeed {}
 
 /// Point inversion failed in partial oprf evaluation.
 ///
-/// `evaluate_prove_partial` failed because the server's private key combined with the public
-/// `info` results in a zero scalar. A RFC 9497 [states], this is practically impossible,
-/// unless the public `info` provider is malicious and knows the server's private key.
+/// `evaluate_prove_partial` failed because the server's secret key combined with the public
+/// `info` results in a zero scalar. A [RFC 9497 states], this is practically impossible,
+/// unless the public `info` provider is malicious and knows the server's secret key.
 ///  
 /// [states]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.3-6
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UndefinedInverse;
+
+impl core::fmt::Display for UndefinedInverse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "point inversion failed in partial OPRF evaluation")
+    }
+}
+
+impl core::error::Error for UndefinedInverse {}

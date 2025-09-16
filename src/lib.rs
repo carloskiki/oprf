@@ -1,10 +1,25 @@
+//! Implementation of the Oblivious Pseudorandom Function (OPRF) protocol defined in
+//! [RFC 9497](https://www.rfc-editor.org/rfc/rfc9497.html).
+
+#![no_std]
+
 pub mod client;
-mod input;
 pub mod mode;
 pub mod server;
 
-use digest::Digest;
-use group::{Group, GroupEncoding, ff::Field, prime::PrimeGroup};
+use core::ops::Shl;
+
+use digest::{
+    Digest,
+    array::{Array, ArraySize, AsArrayRef, AssocArraySize},
+    consts::{B1, True, U65536},
+    typenum::{Double, IsLess},
+};
+use group::{
+    Group, GroupEncoding,
+    ff::{Field, PrimeField},
+    prime::PrimeGroup,
+};
 use mode::Mode;
 use rand_core::RngCore;
 
@@ -16,10 +31,10 @@ pub trait Suite {
     const IDENTIFIER: &'static [u8];
 
     /// The prime-order group used in this ciphersuite.
-    type Group: PrimeGroup + GroupEncoding;
+    type Group: PrimeGroup<Scalar: PrimeField<Repr: AsArrayRef<u8, Size: IsLess<U65536, Output = True>>>>
+        + GroupEncoding<Repr: AsArrayRef<u8, Size: IsLess<U65536, Output = True>>>;
     // TODO: Modeling `serialize` and `deserialize` with `GroupEncoding` is lazy and can easily
     // lead to implementation mistakes.
-    // TODO: Make sure that `Group` and `Group::Scalar` encode to a size less than 2^16 bytes.
 
     /// The hash function used in this ciphersuite.
     type Hash: Digest;
@@ -36,7 +51,7 @@ pub trait Suite {
 /// What the client sends to the server for evaluation, so that the server does not learn the
 /// original input.
 ///
-/// This is a simple wrapper to help prevent bewteen blinded, evaluated, and key elements.
+/// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Blind<E>(pub E);
 
@@ -44,48 +59,95 @@ pub struct Blind<E>(pub E);
 ///
 /// What the server sends back to the client after evaluating the blinded element.
 ///
-/// This is a simple wrapper to help prevent bewteen blinded, evaluated, and key elements.
+/// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Evaluated<E>(pub E);
 
 /// The verifying key of the server.
 ///
-/// This is a simple wrapper to help prevent bewteen blinded, evaluated, and key elements.
+/// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VerifyingKey<E>(pub E);
 
 /// Proof of evaluation.
 ///
 /// A proof that the server evaluated the blinded element using its private key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Proof<S> {
-    c: S,
-    s: S,
+    /// Challenge scalar.
+    pub c: S,
+    /// Response scalar.
+    pub s: S,
+}
+impl<S> Proof<S>
+where
+    S: PrimeField<Repr: AsArrayRef<u8, Size: Shl<B1, Output: ArraySize>>>,
+{
+    /// Serialize the proof to bytes.
+    ///
+    /// Specified in [RFC 9497 Section 3.3](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3-3).
+    pub fn to_bytes(&self) -> Array<u8, Double<<S::Repr as AssocArraySize>::Size>> {
+        let c_bytes = self.c.to_repr();
+        let c_bytes = c_bytes.as_array_ref();
+        let s_bytes = self.s.to_repr();
+        let s_bytes = s_bytes.as_array_ref();
+
+        let mut c = Array::uninit();
+        let (left, right) = c.split_at_mut(c_bytes.len());
+        for (val, dst) in c_bytes.iter().zip(left) {
+            dst.write(*val);
+        }
+        for (val, dst) in s_bytes.iter().zip(right) {
+            dst.write(*val);
+        }
+        // SAFETY: We wrote to every element of `c`.
+        unsafe { c.assume_init() }
+    }
 }
 
-/// [`CreateContextString`] in RFC 9497, with a prefix.
+/// Input to a OPRF instance.
 ///
-/// [`CreateContextString`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.1-5
-macro_rules! context_string {
-    ($prefix:literal; <$suite:ty, $mode:ty>) => {
-        [
-            $prefix,
-            b"OPRFV1-",
-            &[<$mode>::IDENTIFIER],
-            b"-",
-            <$suite>::IDENTIFIER,
-        ]
-    };
-}
-pub(crate) use context_string;
+/// This is a byte slice that is less than 2^16 bytes in length. It can be constructed with the
+/// `TryFrom<&[u8]>` implementation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct Input<'a>(&'a [u8]);
 
-/// Helper for hashing to a group with the appropriate domain.
-fn hash_to_group<S: Suite, M: Mode>(hash: &[&[u8]]) -> S::Group {
-    S::hash_to_group(hash, &context_string!(b"HashToGroup-"; <S, M>))
+/// Error indicating that the input is too long.
+///
+/// This is returned when attempting to create an `Input` from a byte slice with length greater
+/// than `u16::MAX` bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct TooLong;
+
+impl core::fmt::Display for TooLong {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "input is too long")
+    }
 }
 
-/// Helper for hashing to a group with the appropriate domain.
-fn hash_to_scalar<S: Suite, M: Mode>(hash: &[&[u8]]) -> <S::Group as Group>::Scalar {
-    S::hash_to_scalar(hash, &context_string!(b"HashToScalar-"; <S, M>))
+impl core::error::Error for TooLong {}
+
+impl<'a> TryFrom<&'a [u8]> for Input<'a> {
+    type Error = TooLong;
+
+    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
+        if value.len() > u16::MAX as usize {
+            return Err(TooLong);
+        }
+        Ok(Input(value))
+    }
+}
+
+impl<'a> AsRef<[u8]> for Input<'a> {
+    fn as_ref(&self) -> &[u8] {
+        self.0
+    }
+}
+
+impl<'a> From<Input<'a>> for &'a [u8] {
+    fn from(input: Input<'a>) -> Self {
+        input.0
+    }
 }
 
 /// Implementation of [`GenerateProof`] from RFC 9497.
@@ -122,7 +184,7 @@ fn generate_proof<const N: usize, S: Suite, M: Mode>(
         a2.as_ref(),
         &(a3.as_ref().len() as u16).to_be_bytes(),
         a3.as_ref(),
-        b"challenge",
+        b"Challenge",
     ];
 
     let c = hash_to_scalar::<S, M>(&challenge_transcript);
@@ -211,7 +273,7 @@ fn verify_proof<const N: usize, S: Suite, M: Mode>(
         a2.as_ref(),
         &(a3.as_ref().len() as u16).to_be_bytes(),
         a3.as_ref(),
-        b"challenge",
+        b"Challenge",
     ];
 
     let expected_c = hash_to_scalar::<S, M>(&challenge_transcript);
@@ -265,4 +327,30 @@ fn compute_composites<const N: usize, S: Suite, M: Mode>(
     }
 
     (m, z)
+}
+
+/// [`CreateContextString`] in RFC 9497, with a prefix.
+///
+/// [`CreateContextString`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.1-5
+macro_rules! context_string {
+    ($prefix:literal; <$suite:ty, $mode:ty>) => {
+        [
+            $prefix,
+            b"OPRFV1-",
+            &[<$mode>::IDENTIFIER],
+            b"-",
+            <$suite>::IDENTIFIER,
+        ]
+    };
+}
+pub(crate) use context_string;
+
+/// Helper for hashing to a group with the appropriate domain.
+fn hash_to_group<S: Suite, M: Mode>(hash: &[&[u8]]) -> S::Group {
+    S::hash_to_group(hash, &context_string!(b"HashToGroup-"; <S, M>))
+}
+
+/// Helper for hashing to a group with the appropriate domain.
+fn hash_to_scalar<S: Suite, M: Mode>(hash: &[&[u8]]) -> <S::Group as Group>::Scalar {
+    S::hash_to_scalar(hash, &context_string!(b"HashToScalar-"; <S, M>))
 }

@@ -1,107 +1,203 @@
+//! OPRF [`Client`] implementation.
+
 use digest::{Digest, Output};
 use group::{Group, GroupEncoding, ff::Field};
 use rand_core::RngCore;
 
 use crate::{
-    Blind, Evaluated, Mode, Proof, Suite, VerifyingKey, hash_to_group, hash_to_scalar,
-    input::Input, mode, verify_proof,
+    Blind, Evaluated, Input, Mode, Proof, Suite, VerifyingKey, hash_to_group, hash_to_scalar, mode,
+    verify_proof,
 };
 
 /// Client of the OPRF protocol.
+///
+/// The client processes the [`Input`]s, [`Blind`]s them, and later unblinds the [`Evaluated`]
+/// elements by the [`Server`]. Depending on the [`mode`], it may also hold the [`VerifyingKey`]
+/// of the [`Server`] to assert that the generated [`Proof`] of evaluation is correct.
+///
+/// There are three distinct `blind` methods and three distinct `finalize` methods. Calling
+/// [`Client::blind`] or [`Client::finalize`] will execute the correct method based on the
+/// [`Mode`](mode) type parameter. In the documentation, these methods are distinguished by the
+/// `impl Client<_, Mode>` blocks.
+///
+/// Here are quick links to the methods for the different modes: [`mode::Base`],
+/// [`mode::Verifiable`], and [`mode::Partial`].
+///
+/// [`Server`]: crate::server::Server
+/// [`mode::Base`]: #impl-Client<S,+Base>
+/// [`mode::Verifiable`]: #impl-Client<S,+Verifiable>
+/// [`mode::Partial`]: #impl-Client<S,+Partial>
 #[allow(private_bounds)]
-pub struct Client<S: Suite, M: Mode> {
-    blind: <S::Group as Group>::Scalar,
-    digest: S::Hash,
-    payload: M::ClientPayload<S::Group>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Client<'a, 'b, const N: usize, S: Suite, M: Mode> {
+    blinds: [<S::Group as Group>::Scalar; N],
+    inputs: [Input<'a>; N],
+    payload: M::ClientPayload<'b, N, S::Group>,
 }
 
-impl<S: Suite> Client<S, mode::Base> {
+impl<const N: usize, S: Suite, M: Mode> zeroize::Zeroize for Client<'_, '_, N, S, M> {
+    fn zeroize(&mut self) {
+        self.blinds = core::array::from_fn(|_| <S::Group as Group>::Scalar::ZERO);
+    }
+}
+
+#[allow(private_bounds)]
+impl<'a, 'b, const N: usize, S: Suite, M: Mode> Client<'a, 'b, N, S, M> {
+    /// `Mode` dependent implementation of the `blind` operation in `mode::Base`, so that the
+    /// correct `context_string` is used in each mode. Reduces code duplication.
+    ///
+    /// Specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2)
+    #[allow(clippy::type_complexity)]
+    fn blind_impl(
+        inputs: [Input<'a>; N],
+        rng: &mut impl RngCore,
+    ) -> Result<(Client<'a, 'b, N, S, mode::Base>, [Blind<S::Group>; N]), InvalidInput> {
+        let blinds = core::array::from_fn(|_| <S::Group as Group>::Scalar::random(rng));
+        let mut error = None;
+        let blinded_elements = core::array::from_fn(|i| {
+            let input_element: S::Group = hash_to_group::<S, M>(&[inputs[i].as_ref()]);
+            if input_element.is_identity().into() {
+                error.replace(InvalidInput);
+            }
+            Blind(input_element * blinds[i])
+        });
+        if let Some(InvalidInput) = error {
+            return Err(InvalidInput);
+        }
+
+        Ok((
+            Client {
+                blinds,
+                inputs,
+                payload: (),
+            },
+            blinded_elements,
+        ))
+    }
+
+    /// Code shared between all the `finealize` implementations, to reduce code duplication.
+    ///
+    /// Specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-7)
+    fn finalize_impl(self, evaluated_elements: [Evaluated<S::Group>; N]) -> [Output<S::Hash>; N] {
+        let inverted_blinds = if N == 1 {
+            self.blinds.map(|b| b.invert().expect("blind is non-zero"))
+        } else {
+            let mut blinds = self.blinds;
+            let mut scratch = [<S::Group as Group>::Scalar::ONE; N];
+            group::ff::BatchInverter::invert_with_external_scratch(&mut blinds, &mut scratch);
+            blinds
+        };
+
+        core::array::from_fn(|i| {
+            let n = evaluated_elements[i].0 * inverted_blinds[i];
+            let unblinded_element = n.to_bytes();
+
+            let mut digest = S::Hash::new();
+            digest.update((self.inputs[i].as_ref().len() as u16).to_be_bytes());
+            digest.update(self.inputs[i].as_ref());
+            digest.update((unblinded_element.as_ref().len() as u16).to_be_bytes());
+            digest.update(unblinded_element.as_ref());
+            digest.update("Finalize");
+            digest.finalize()
+        })
+    }
+}
+
+impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Base> {
     /// Blinds an input.
     ///
     /// The first step of the OPRF protocol for the client. The input is blinded using
     /// the provided random number generator.
     ///
-    /// As specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2)
+    /// Specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2).
     pub fn blind(
-        input: Input<'_>,
+        inputs: [Input<'a>; N],
         rng: &mut impl RngCore,
-    ) -> Result<(Self, Blind<S::Group>), InvalidInput> {
-        let (blind, blinded_element, digest) = blind::<S, mode::Base, _>(input, rng)?;
+    ) -> Result<(Self, [Blind<S::Group>; N]), InvalidInput> {
+        Self::blind_impl(inputs, rng)
+    }
 
+    /// Finalize the protocol.
+    ///
+    /// Transforms the [`Evaluated`] element into a pseudo-random output.
+    ///
+    /// Defined in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-7)
+    pub fn finalize(self, evaluated_elements: [Evaluated<S::Group>; N]) -> [Output<S::Hash>; N] {
+        self.finalize_impl(evaluated_elements)
+    }
+}
+
+impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Verifiable> {
+    /// Blinds an input.
+    ///
+    /// The first step of the VOPRF protocol for the client. The input is blinded using
+    /// the provided random number generator. The committed verifying key of the server
+    /// is stored for later verification, conforming with the [security requirements] of the RFC.
+    ///
+    /// Specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2)
+    ///
+    /// [security requirements]: https://www.rfc-editor.org/rfc/rfc9497.html#section-7.1-11
+    pub fn blind(
+        inputs: [Input<'a>; N],
+        verifying_key: crate::VerifyingKey<S::Group>,
+        rng: &mut impl RngCore,
+    ) -> Result<(Self, [Blind<S::Group>; N]), InvalidInput> {
+        let (Client { blinds, inputs, .. }, blinded_elements) = Self::blind_impl(inputs, rng)?;
         Ok((
             Client {
-                blind,
-                digest,
-                payload: (),
+                blinds,
+                inputs,
+                payload: mode::VerifyingPayload {
+                    verifying_key,
+                    blinded_elements,
+                },
             },
-            blinded_element,
+            blinded_elements,
         ))
     }
 
     /// Finalize the protocol.
     ///
-    /// Transforms the evaluated element into a pseudo-random output.
+    /// Transforms the evaluated element into a pseudo-random output, and verifies the proof
+    /// provided by the server.
     ///
-    /// Defined in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-7)
-    pub fn finalize(self, Evaluated(evaluated_element): Evaluated<S::Group>) -> Output<S::Hash> {
-        let n = evaluated_element * self.blind.invert().expect("blind is non-zero");
-        let unblinded_element = n.to_bytes();
+    /// Defined in [RFC 9497 Section 3.3.2](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.2-5)
+    pub fn finalize(
+        self,
+        evaluated_elements: [Evaluated<S::Group>; N],
+        proof: Proof<<S::Group as Group>::Scalar>,
+    ) -> Result<[Output<S::Hash>; N], InvalidProof> {
+        let verifying_key = self.payload.verifying_key.0;
+        if !verify_proof::<N, S, mode::Verifiable>(
+            S::Group::generator(),
+            verifying_key,
+            self.payload.blinded_elements.map(|b| b.0),
+            evaluated_elements.map(|e| e.0),
+            proof,
+        ) {
+            return Err(InvalidProof);
+        }
 
-        self.digest
-            .chain_update((unblinded_element.as_ref().len() as u16).to_be_bytes())
-            .chain_update(unblinded_element.as_ref())
-            .chain_update("Finalize")
-            .finalize()
+        Ok(self.finalize_impl(evaluated_elements))
     }
 }
 
-impl<S: Suite> Client<S, mode::Verifiable> {
+impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Partial> {
     /// Blinds an input.
     ///
     /// The first step of the VOPRF protocol for the client. The input is blinded using
     /// the provided random number generator. The committed verifying key of the server
     /// is stored for later verification, conforming with the [security requirements] of the RFC.
     ///
-    /// Specified in [RFC 9497 Section 3.3.2](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2)
+    /// Specified in [RFC 9497 Section 3.3.3](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.3-2)
     ///
     /// [security requirements]: https://www.rfc-editor.org/rfc/rfc9497.html#section-7.1-11
     pub fn blind(
-        input: Input<'_>,
+        inputs: [Input<'a>; N],
+        info: Input<'b>,
         verifying_key: crate::VerifyingKey<S::Group>,
         rng: &mut impl RngCore,
-    ) -> Result<(Self, Blind<S::Group>), InvalidInput> {
-        let (blind, blinded_element, digest) = blind::<S, mode::Verifiable, _>(input, rng)?;
-
-        Ok((
-            Client {
-                blind,
-                digest,
-                payload: mode::VerifyingPayload {
-                    verifying_key,
-                    blinded_element,
-                },
-            },
-            blinded_element,
-        ))
-    }
-}
-
-impl<S: Suite> Client<S, mode::Partial> {
-    /// Blinds an input.
-    ///
-    /// The first step of the VOPRF protocol for the client. The input is blinded using
-    /// the provided random number generator. The committed verifying key of the server
-    /// is stored for later verification, conforming with the [security requirements] of the RFC.
-    ///
-    /// Specified in [RFC 9497 Section 3.3.2](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2)
-    ///
-    /// [security requirements]: https://www.rfc-editor.org/rfc/rfc9497.html#section-7.1-11
-    pub fn blind(
-        input: Input<'_>,
-        info: Input<'_>,
-        verifying_key: crate::VerifyingKey<S::Group>,
-        rng: &mut impl RngCore,
-    ) -> Result<(Self, Blind<S::Group>), InvalidInput> {
+    ) -> Result<(Self, [Blind<S::Group>; N]), InvalidInput> {
         let framed_info = [
             b"Info".as_slice(),
             &(info.as_ref().len() as u16).to_be_bytes(),
@@ -114,103 +210,105 @@ impl<S: Suite> Client<S, mode::Partial> {
             return Err(InvalidInput);
         }
 
-        let (blind, blinded_element, mut digest) = blind::<S, mode::Verifiable, _>(input, rng)?;
-        digest.update((info.as_ref().len() as u16).to_be_bytes());
-        digest.update(info.as_ref());
+        let (Client { blinds, inputs, .. }, blinded_elements) = Self::blind_impl(inputs, rng)?;
 
         Ok((
             Client {
-                blind,
-                digest,
-                payload: mode::VerifyingPayload {
+                blinds,
+                inputs,
+                payload: mode::PartialPayload {
                     verifying_key: VerifyingKey(tweaked_key),
-                    blinded_element,
+                    blinded_elements,
+                    info,
                 },
             },
-            blinded_element,
+            blinded_elements,
         ))
     }
-}
 
-#[allow(private_bounds)]
-impl<S, M> Client<S, M>
-where
-    S: Suite,
-    M: Mode<ClientPayload<S::Group> = mode::VerifyingPayload<S::Group>>,
-{
     /// Finalize the protocol.
     ///
-    /// Transforms the evaluated element into a pseudo-random output.
+    /// Transforms the evaluated element into a pseudo-random output, and verifies the proof
+    /// provided by the server.
     ///
-    /// Defined in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-7)
+    /// Defined in [RFC 9497 Section 3.3.3](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.3-8)
     pub fn finalize(
         self,
-        Evaluated(evaluated_element): Evaluated<S::Group>,
+        evaluated_elements: [Evaluated<S::Group>; N],
         proof: Proof<<S::Group as Group>::Scalar>,
-    ) -> Result<Output<S::Hash>, InvalidProof> {
-        let evaluated_elements = [evaluated_element];
-        let blinded_elements = [self.payload.blinded_element.0];
+    ) -> Result<[Output<S::Hash>; N], InvalidProof> {
         let verifying_key = self.payload.verifying_key.0;
-        if !verify_proof::<1, S, mode::Partial>(
+        if !verify_proof::<N, S, mode::Partial>(
             S::Group::generator(),
             verifying_key,
-            evaluated_elements,
-            blinded_elements,
+            evaluated_elements.map(|e| e.0),
+            self.payload.blinded_elements.map(|b| b.0),
             proof,
         ) {
             return Err(InvalidProof);
         }
 
-        let n = evaluated_element * self.blind.invert().expect("blind is non-zero");
-        let unblinded_element = n.to_bytes();
+        let inverted_blinds = if N == 1 {
+            self.blinds.map(|b| b.invert().expect("blind is non-zero"))
+        } else {
+            let mut blinds = self.blinds;
+            let mut scratch = [<S::Group as Group>::Scalar::ONE; N];
+            group::ff::BatchInverter::invert_with_external_scratch(&mut blinds, &mut scratch);
+            blinds
+        };
 
-        Ok(self
-            .digest
-            .chain_update((unblinded_element.as_ref().len() as u16).to_be_bytes())
-            .chain_update(unblinded_element.as_ref())
-            .chain_update("Finalize")
-            .finalize())
+        Ok(core::array::from_fn(|i| {
+            let n = evaluated_elements[i].0 * inverted_blinds[i];
+            let unblinded_element = n.to_bytes();
+
+            let mut digest = S::Hash::new();
+            digest.update((self.inputs[i].as_ref().len() as u16).to_be_bytes());
+            digest.update(self.inputs[i].as_ref());
+            digest.update((self.payload.info.as_ref().len() as u16).to_be_bytes());
+            digest.update(self.payload.info.as_ref());
+            digest.update((unblinded_element.as_ref().len() as u16).to_be_bytes());
+            digest.update(unblinded_element.as_ref());
+            digest.update("Finalize");
+            digest.finalize()
+        }))
     }
-}
-
-#[allow(clippy::type_complexity)]
-fn blind<S: Suite, M: Mode, R: RngCore>(
-    input: Input<'_>,
-    rng: &mut R,
-) -> Result<(<S::Group as Group>::Scalar, Blind<S::Group>, S::Hash), InvalidInput> {
-    let blind = <S::Group as Group>::Scalar::random(rng);
-    let input_element: S::Group = hash_to_group::<S, mode::Base>(&[input.as_ref()]);
-    let blinded_element = input_element * blind;
-    if input_element.is_identity().into() {
-        return Err(InvalidInput);
-    }
-
-    // This is performed here rather than in the [`finalize`] step of RFC 9497, so that we don't
-    // require the `input` again in that step.
-    //
-    // [`finalize`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-7
-    let mut digest = S::Hash::new();
-    digest.update((input.as_ref().len() as u16).to_be_bytes());
-    digest.update(input.as_ref());
-
-    Ok((blind, Blind(blinded_element), digest))
 }
 
 /// The proof provided is invalid.
 ///
-/// This is returned when proof verification fails.
+/// This is returned when proof verification fails. In other words, the proof fails to show that
+/// the server used the correct key to evaluate the blinded element.
 ///
 /// Corresponds to [`VerifyError`] in RFC 9497.
 ///
 /// [`VerifyError`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-5.3-2.2
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvalidProof;
+
+impl core::fmt::Display for InvalidProof {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "the proof provided is invalid")
+    }
+}
+
+impl core::error::Error for InvalidProof {}
 
 /// The input provided is invalid.
 ///
-/// This practically never happens. It is likely a sign that the `Rng` provided is compromised, or
-/// that the `input` provided was crafted to cause a collision.
+/// This practically never happens. It is roughly equivalent to finding a hash collision. This
+/// error is likely a sign that the `RngCore` provided is compromised, or that the `input` was
+/// crafted to cause a collision.
 ///
 /// Corresponds to [`InvalidInputError`] in RFC 9497.
 ///
 /// [`InvalidInputError`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-5.3-4.2
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvalidInput;
+
+impl core::fmt::Display for InvalidInput {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "the input provided is invalid")
+    }
+}
+
+impl core::error::Error for InvalidInput {}

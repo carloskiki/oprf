@@ -5,9 +5,9 @@
 //! provided as a type parameter to these structs, and the correct methods are exposed based
 //! on it.
 
-use group::{ff::PrimeField, prime::PrimeGroup};
+use group::Group;
 
-use crate::{Blind, VerifyingKey};
+use crate::{Blind, Input, VerifyingKey};
 
 /// The basic (`OPRF`) mode of operation.
 ///
@@ -43,29 +43,29 @@ pub(crate) trait Mode {
     const IDENTIFIER: u8;
 
     /// Extra payload the client needs to run the protocol in this mode.
-    type ClientPayload<E>;
-    type ServerPayload<E: PrimeGroup>: for<'a> _From<&'a E::Scalar>;
+    type ClientPayload<'a, const N: usize, E>;
+    type ServerPayload<E: Group>: for<'a> _From<&'a E::Scalar> + GetVerifyingKey<E>;
 }
 
 impl Mode for Base {
     const IDENTIFIER: u8 = 0x00;
 
-    type ClientPayload<E> = ();
-    type ServerPayload<E: PrimeGroup> = Empty;
+    type ClientPayload<'a, const N: usize, E> = ();
+    type ServerPayload<E: Group> = Empty;
 }
 
 impl Mode for Verifiable {
     const IDENTIFIER: u8 = 0x01;
 
-    type ClientPayload<E> = VerifyingPayload<E>;
-    type ServerPayload<E: PrimeGroup> = VerifyingKey<E>;
+    type ClientPayload<'a, const N: usize, E> = VerifyingPayload<N, E>;
+    type ServerPayload<E: Group> = VerifyingKey<E>;
 }
 
 impl Mode for Partial {
     const IDENTIFIER: u8 = 0x02;
 
-    type ClientPayload<E> = VerifyingPayload<E>;
-    type ServerPayload<E: PrimeGroup> = VerifyingKey<E>;
+    type ClientPayload<'a, const N: usize, E> = PartialPayload<'a, N, E>;
+    type ServerPayload<E: Group> = VerifyingKey<E>;
 }
 
 /// Helper `From` trait that does not have a blanket impl.
@@ -73,12 +73,40 @@ pub(crate) trait _From<E> {
     fn _from(e: E) -> Self;
 }
 
-/// Extra payload the server needs to run the protocol when proof evaluation is needed.
-pub(crate) struct VerifyingPayload<E> {
+/// Helper to try to get a verifying key from the server payload.
+pub(crate) trait GetVerifyingKey<E> {
+    fn get_verifying_key(&self) -> Option<VerifyingKey<E>>;
+}
+
+/// Extra payload the client needs to run the protocol when proof evaluation is needed.
+pub(crate) struct VerifyingPayload<const N: usize, E> {
     /// The verifying_key of the server.
     pub verifying_key: VerifyingKey<E>,
-    /// The blinded element evaluated by the server.
-    pub blinded_element: Blind<E>,
+    /// The blinded element.
+    pub blinded_elements: [Blind<E>; N],
+}
+
+/// Extra payload the client needs to run the protocol when proof evaluation with shared info is
+/// needed.
+pub(crate) struct PartialPayload<'a, const N: usize, E> {
+    /// The verifying_key of the server.
+    pub verifying_key: VerifyingKey<E>,
+    /// The blinded element.
+    pub blinded_elements: [Blind<E>; N],
+    /// The shared info.
+    pub info: Input<'a>,
+}
+
+impl<E: Group> _From<&E::Scalar> for VerifyingKey<E> {
+    fn _from(s: &E::Scalar) -> Self {
+        VerifyingKey(E::mul_by_generator(s))
+    }
+}
+
+impl<E: Group> GetVerifyingKey<E> for VerifyingKey<E> {
+    fn get_verifying_key(&self) -> Option<VerifyingKey<E>> {
+        Some(*self)
+    }
 }
 
 /// Empty payload.
@@ -90,14 +118,8 @@ impl<T> _From<&T> for Empty {
     }
 }
 
-impl<S: PrimeField> From<S> for Empty {
-    fn from(_: S) -> Self {
-        Empty
-    }
-}
-
-impl<E: PrimeGroup> _From<&E::Scalar> for VerifyingKey<E> {
-    fn _from(s: &E::Scalar) -> Self {
-        VerifyingKey(E::mul_by_generator(s))
+impl<E> GetVerifyingKey<E> for Empty {
+    fn get_verifying_key(&self) -> Option<VerifyingKey<E>> {
+        None
     }
 }
