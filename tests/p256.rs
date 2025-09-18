@@ -1,9 +1,9 @@
 use digest::consts::U48;
 use group::ff::PrimeField;
 use oprf::mode::{Base, Partial, Verifiable};
+use vector::parse_vectors;
 use p256::ProjectivePoint;
 use sha2::Sha256;
-use vector::parse_vectors;
 
 mod vector;
 
