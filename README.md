@@ -20,8 +20,8 @@ The scope of RFC 9497 and this crate covers three types of OPRFs:
 - Verifiable OPRF (VOPRF): An extension of the base OPRF protocol where the server also provides a
     proof that it used the correct key `k` in the computation of `F(k, x)`, which the client can
     verify without learning `k`.
-- Partial OPRF (POPRF): An extension to (VOPRF) where a shared input between the client and
-    server is also used in the computation of `F(k, x)`.
+- Partial OPRF (POPRF): An extension to VOPRF where a shared input `y` between the client and
+    server is also used in the computation: `F(k, x, y)`.
 
 ## TODO
 

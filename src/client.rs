@@ -24,9 +24,9 @@ use crate::{
 /// [`mode::Verifiable`], and [`mode::Partial`].
 ///
 /// [`Server`]: crate::server::Server
-/// [`mode::Base`]: #impl-Client<S,+Base>
-/// [`mode::Verifiable`]: #impl-Client<S,+Verifiable>
-/// [`mode::Partial`]: #impl-Client<S,+Partial>
+/// [`mode::Base`]: #impl-Client<'a,+'b,+N,+S,+Base>
+/// [`mode::Verifiable`]: #impl-Client<'a,+'b,+N,+S,+Verifiable>
+/// [`mode::Partial`]: #impl-Client<'a,+'b,+N,+S,+Partial>
 #[allow(private_bounds)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Client<'a, 'b, const N: usize, S: Suite, M: Mode> {
