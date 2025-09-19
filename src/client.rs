@@ -110,6 +110,7 @@ impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Base> {
     /// the provided random number generator.
     ///
     /// Specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2).
+    #[allow(clippy::type_complexity)]
     pub fn blind(
         inputs: [Input<'a>; N],
         rng: &mut impl RngCore,
@@ -137,6 +138,7 @@ impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Verifiable> {
     /// Specified in [RFC 9497 Section 3.3.1](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-2)
     ///
     /// [security requirements]: https://www.rfc-editor.org/rfc/rfc9497.html#section-7.1-11
+    #[allow(clippy::type_complexity)]
     pub fn blind(
         inputs: [Input<'a>; N],
         verifying_key: crate::VerifyingKey<S::Group>,
@@ -192,6 +194,7 @@ impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Partial> {
     /// Specified in [RFC 9497 Section 3.3.3](https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.3-2)
     ///
     /// [security requirements]: https://www.rfc-editor.org/rfc/rfc9497.html#section-7.1-11
+    #[allow(clippy::type_complexity)]
     pub fn blind(
         inputs: [Input<'a>; N],
         info: Input<'b>,

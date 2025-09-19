@@ -29,8 +29,9 @@ The scope of RFC 9497 and this crate covers three types of OPRFs:
 - [x] Bound Group serialization to `u16::MAX`.
 - [x] Proof serialization.
 - [x] Batch implementation.
+- [x] Test vectors.
+- [x] CI
+- [ ] Make all CI pass.
 - [ ] Main crate documentation (100% coverage).
-
-- [ ] Test vectors.
 - [ ] Benchmarks.
-- [ ] CI
+- [ ] Publish.
