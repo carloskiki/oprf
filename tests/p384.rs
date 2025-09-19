@@ -1,10 +1,9 @@
 use digest::consts::U72;
-use p384::ProjectivePoint;
-use sha2::Sha384;
 use group::ff::PrimeField;
 use oprf::mode::{Base, Partial, Verifiable};
+use p384::ProjectivePoint;
+use sha2::Sha384;
 use vector::parse_vectors;
-
 
 mod vector;
 

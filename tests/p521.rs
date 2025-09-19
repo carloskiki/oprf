@@ -1,10 +1,9 @@
 use digest::consts::U98;
-use p521::ProjectivePoint;
-use sha2::Sha512;
 use group::ff::PrimeField;
 use oprf::mode::{Base, Partial, Verifiable};
+use p521::ProjectivePoint;
+use sha2::Sha512;
 use vector::parse_vectors;
-
 
 mod vector;
 
@@ -124,7 +123,7 @@ fn partial() {
             Info = "7465737420696e666f"
         }]
     }.test();
-    
+
     parse_vectors! { <P521, Partial>:
         Seed = "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
         KeyInfo = "74657374206b6579"

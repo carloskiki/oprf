@@ -143,7 +143,7 @@ fn partial() {
             Info = "7465737420696e666f"
         }]
     }.test();
-    
+
     parse_vectors! { <Ristretto255, Partial>:
         Seed = "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
         KeyInfo = "74657374206b6579"

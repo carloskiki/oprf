@@ -1,12 +1,16 @@
 use std::num::NonZeroU16;
 
-use digest::{array::Array, consts::{U0, U64}, XofFixedWrapper};
+use digest::{
+    XofFixedWrapper,
+    array::Array,
+    consts::{U0, U64},
+};
 use ed448_goldilocks::DecafPoint;
+use group::ff::PrimeField;
 use hash2curve::{ExpandMsg, ExpandMsgXof, Expander as _};
-use oprf::mode::{Base, Verifiable, Partial};
+use oprf::mode::{Base, Partial, Verifiable};
 use p256::elliptic_curve::ops::Reduce;
 use sha3::Shake256;
-use group::ff::PrimeField;
 
 use crate::vector::parse_vectors;
 
@@ -22,24 +26,30 @@ impl oprf::Suite for Decaf448 {
     type Hash = XofFixedWrapper<Shake256, U64>;
 
     fn hash_to_group(hash: &[&[u8]], domain: &[&[u8]]) -> Self::Group {
-        let mut expander = <ExpandMsgXof::<Shake256> as ExpandMsg<U0>>::expand_message(
+        let mut expander = <ExpandMsgXof<Shake256> as ExpandMsg<U0>>::expand_message(
             hash,
             domain,
             NonZeroU16::new(112).expect("112 is non-zero"),
-        ).expect("instantiation is valid");
+        )
+        .expect("instantiation is valid");
         let mut uniform_bytes = [0u8; 112];
-        expander.fill_bytes(&mut uniform_bytes).expect("filling correct size");
+        expander
+            .fill_bytes(&mut uniform_bytes)
+            .expect("filling correct size");
         DecafPoint::from_uniform_bytes(&uniform_bytes)
     }
 
     fn hash_to_scalar(hash: &[&[u8]], domain: &[&[u8]]) -> <Self::Group as group::Group>::Scalar {
-        let mut expander = <ExpandMsgXof::<Shake256> as ExpandMsg<U0>>::expand_message(
+        let mut expander = <ExpandMsgXof<Shake256> as ExpandMsg<U0>>::expand_message(
             hash,
             domain,
             NonZeroU16::new(64).expect("64 is non-zero"),
-        ).expect("instantiation is valid");
+        )
+        .expect("instantiation is valid");
         let mut uniform_bytes = [0u8; 64];
-        expander.fill_bytes(&mut uniform_bytes).expect("filling correct size");
+        expander
+            .fill_bytes(&mut uniform_bytes)
+            .expect("filling correct size");
         let array: Array<_, U64> = Array(uniform_bytes);
         ed448_goldilocks::DecafScalar::reduce(&array)
     }
@@ -95,7 +105,7 @@ fn verifiable() {
             ProofRandomScalar = "b1b748135d405ce48c6973401d9455bb8ccd18b01d0295c0627f67661200dbf9569f73fbb3925daa043a070e5f953d80bb464ea369e5522b"
         }]
     }.test();
-    
+
     parse_vectors! { <Decaf448, Verifiable>:
         Seed = "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
         KeyInfo = "74657374206b6579"
