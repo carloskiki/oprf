@@ -1,8 +1,15 @@
 [package]
 name = "oprf"
-version = "0.1.0"
+version = "0.1.0-rc.0"
+authors = ["Charles Edward Gagnon"]
 edition = "2024"
 rust-version = "1.89"
+description = "Oblivious Pseudo Random Function (OPRF) protocol and its variants."
+readme = "./README.md"
+repository = "https://github.com/carloskiki/oprf"
+license = "MIT"
+keywords = ["cryptography", "oprf", "voprf", "poprf"]
+categories = ["cryptography", "algorithms"]
 
 [dependencies]
 group = "0.14.0-pre.0"
