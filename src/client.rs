@@ -13,9 +13,10 @@ use crate::{
 
 /// Client of the OPRF protocol.
 ///
-/// The client processes the [`Input`]s, blinds them, and later unblinds the [`Evaluated`]
-/// elements by the [`Server`]. Depending on the [`mode`], it may also hold the [`VerifyingKey`]
-/// of the [`Server`] to assert that the generated [`Proof`] of evaluation is correct.
+/// The client processes the [`Input`]s, [`blind`](Client::blind)s them, and later
+/// [`finalize`](Client::finalize)s the [`Evaluated`] elements by the [`Server`]. Depending on the
+/// [`mode`], it may also hold the [`VerifyingKey`] of the [`Server`] to assert that the generated
+/// [`Proof`] of evaluation is correct.
 ///
 /// This struct is highly generic which makes the `struct` definition look complex, but usage its
 /// is straightforward. There are three distinct `blind` methods and three distinct `finalize` methods.
