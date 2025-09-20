@@ -1,6 +1,20 @@
 # OPRF
 
-Implementation of the Oblivious Pseudorandom Function (OPRF) protocol defined in
+[![crate][crate-image]][crate-link]
+[![Docs][docs-image]][docs-link]
+![Build Status][build-image]
+![MIT licensed][license-image]
+![Rust Version][rustc-image]
+
+[crate-image]: https://img.shields.io/crates/v/oprf
+[crate-link]: https://crates.io/crates/oprf
+[docs-image]: https://docs.rs/oprf/badge.svg
+[docs-link]: https://docs.rs/oprf/
+[build-image]: https://github.com/carloskiki/oprf/actions/workflows/test.yml/badge.svg
+[license-image]: https://img.shields.io/badge/license-MIT-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.89-blue.svg
+
+Implementation of the Oblivious Pseudo Random Function (OPRF) protocol defined in
 [RFC 9497](https://www.rfc-editor.org/rfc/rfc9497.html).
 
 ## What is an OPRF?
