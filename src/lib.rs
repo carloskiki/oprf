@@ -56,21 +56,24 @@ pub trait Suite {
 /// What the client sends to the server for evaluation, so that the server does not learn the
 /// original input.
 ///
-/// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
+/// This is a simple wrapper to help prevent mix-ups bewteen [`Blinded`], [`Evaluated`], and
+/// [`VerifyingKey`] elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Blinded<E>(pub E);
 
 /// An evaluated element.
 ///
-/// What the server sends back to the client after evaluating the blinded element.
+/// What the server sends back to the client after evaluating the [`Blinded`] element.
 ///
-/// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
+/// This is a simple wrapper to help prevent mix-ups bewteen [`Blinded`], [`Evaluated`], and
+/// [`VerifyingKey`] elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Evaluated<E>(pub E);
 
 /// The verifying key of the server.
 ///
-/// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
+/// This is a simple wrapper to help prevent mix-ups bewteen [`Blinded`], [`Evaluated`], and
+/// [`VerifyingKey`] elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VerifyingKey<E>(pub E);
 
