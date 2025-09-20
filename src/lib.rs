@@ -3,12 +3,8 @@
 //!
 //! # Usage
 //!
-//! Usage of this crate depends on whether you want to [implement an OPRF ciphersuite][oprf-suite], or use
-//! an already existing one as a [`client`] or [`server`].
-//!
-//! ## Implementing a ciphersuite
-//! 
-//! Ciphersuites implementers only need to implement the [`Suite`] trait. That's it.
+//! Usage of this crate depends on whether you want to use an already existing ciphersuite as a
+//! [`client`] or a [`server`], or want to implement a new OPRF [`Suite`].
 
 #![no_std]
 
