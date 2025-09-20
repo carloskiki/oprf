@@ -1,24 +1,29 @@
 //! OPRF [`Client`] implementation.
+//!
+//! This module contains the [`Client`] type, and errors that the client may return.
 
 use digest::{Digest, Output};
 use group::{Group, GroupEncoding, ff::Field};
 use rand_core::RngCore;
 
 use crate::{
-    Blind, Evaluated, Input, Mode, Proof, Suite, VerifyingKey, hash_to_group, hash_to_scalar, mode,
+    Blinded, Evaluated, Input, Mode, Proof, Suite, VerifyingKey, hash_to_group, hash_to_scalar, mode,
     verify_proof,
 };
 
 /// Client of the OPRF protocol.
 ///
-/// The client processes the [`Input`]s, [`Blind`]s them, and later unblinds the [`Evaluated`]
+/// The client processes the [`Input`]s, blinds them, and later unblinds the [`Evaluated`]
 /// elements by the [`Server`]. Depending on the [`mode`], it may also hold the [`VerifyingKey`]
 /// of the [`Server`] to assert that the generated [`Proof`] of evaluation is correct.
 ///
-/// There are three distinct `blind` methods and three distinct `finalize` methods. Calling
-/// [`Client::blind`] or [`Client::finalize`] will execute the correct method based on the
+/// This struct is highly generic which makes the `struct` definition look complex, but usage its
+/// is straightforward. There are three distinct `blind` methods and three distinct `finalize` methods.
+/// Calling [`Client::blind`] or [`Client::finalize`] will execute the correct method based on the
 /// [`Mode`](mode) type parameter. In the documentation, these methods are distinguished by the
-/// `impl Client<_, Mode>` blocks.
+/// `impl Client<_, Mode>` blocks. The client supports batching of inputs by default, controlled by
+/// the size of the input array provided to the `blind` method. If the client only needs to process
+/// a single input, one can use an array of size one, e.g. `[input]`.
 ///
 /// Here are quick links to the methods for the different modes: [`mode::Base`],
 /// [`mode::Verifiable`], and [`mode::Partial`].
@@ -51,7 +56,7 @@ impl<'a, 'b, const N: usize, S: Suite, M: Mode> Client<'a, 'b, N, S, M> {
     fn blind_impl(
         inputs: [Input<'a>; N],
         rng: &mut impl RngCore,
-    ) -> Result<(Client<'a, 'b, N, S, mode::Base>, [Blind<S::Group>; N]), InvalidInput> {
+    ) -> Result<(Client<'a, 'b, N, S, mode::Base>, [Blinded<S::Group>; N]), InvalidInput> {
         let blinds = core::array::from_fn(|_| <S::Group as Group>::Scalar::random(rng));
         let mut error = None;
         let blinded_elements = core::array::from_fn(|i| {
@@ -59,7 +64,7 @@ impl<'a, 'b, const N: usize, S: Suite, M: Mode> Client<'a, 'b, N, S, M> {
             if input_element.is_identity().into() {
                 error.replace(InvalidInput);
             }
-            Blind(input_element * blinds[i])
+            Blinded(input_element * blinds[i])
         });
         if let Some(InvalidInput) = error {
             return Err(InvalidInput);
@@ -114,7 +119,7 @@ impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Base> {
     pub fn blind(
         inputs: [Input<'a>; N],
         rng: &mut impl RngCore,
-    ) -> Result<(Self, [Blind<S::Group>; N]), InvalidInput> {
+    ) -> Result<(Self, [Blinded<S::Group>; N]), InvalidInput> {
         Self::blind_impl(inputs, rng)
     }
 
@@ -143,7 +148,7 @@ impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Verifiable> {
         inputs: [Input<'a>; N],
         verifying_key: crate::VerifyingKey<S::Group>,
         rng: &mut impl RngCore,
-    ) -> Result<(Self, [Blind<S::Group>; N]), InvalidInput> {
+    ) -> Result<(Self, [Blinded<S::Group>; N]), InvalidInput> {
         let (Client { blinds, inputs, .. }, blinded_elements) = Self::blind_impl(inputs, rng)?;
         Ok((
             Client {
@@ -200,7 +205,7 @@ impl<'a, 'b, const N: usize, S: Suite> Client<'a, 'b, N, S, mode::Partial> {
         info: Input<'b>,
         verifying_key: crate::VerifyingKey<S::Group>,
         rng: &mut impl RngCore,
-    ) -> Result<(Self, [Blind<S::Group>; N]), InvalidInput> {
+    ) -> Result<(Self, [Blinded<S::Group>; N]), InvalidInput> {
         let framed_info = [
             b"Info".as_slice(),
             &(info.as_ref().len() as u16).to_be_bytes(),

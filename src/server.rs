@@ -4,7 +4,7 @@ use group::{Group, ff::Field};
 use rand_core::RngCore;
 
 use crate::{
-    Blind, Evaluated, Input, Proof, Suite, VerifyingKey, context_string, generate_proof,
+    Blinded, Evaluated, Input, Proof, Suite, VerifyingKey, context_string, generate_proof,
     hash_to_scalar,
     mode::{self, GetVerifyingKey, Mode},
 };
@@ -19,6 +19,10 @@ use crate::{
 /// - [`Server<_, Base>::evaluate`][Base]
 /// - [`Server<_, Verifiable>::evaluate`][Verifiable]
 /// - [`Server<_, Partial>::evaluate`][Partial]
+///
+/// The server supports batching of evaluations by default, as it accepts an array of [`Blinded`]
+/// elements as input, and returns an array of [`Evaluated`] elements. If batching is not desired,
+/// simply use an array of length 1.
 ///
 /// [`secret_key`]: Server::secret_key
 /// [`verifying_key`]: Server::verifying_key
@@ -118,10 +122,10 @@ impl<S: Suite> Server<S, mode::Base> {
     /// [`BlindEvaluate`]: https://www.rfc-editor.org/rfc/rfc9497.html#section-3.3.1-4
     pub fn evaluate<const N: usize>(
         &self,
-        blinded_elements: [Blind<S::Group>; N],
+        blinded_elements: [Blinded<S::Group>; N],
     ) -> [Evaluated<S::Group>; N]
 where {
-        blinded_elements.map(|Blind(blinded_element)| Evaluated(blinded_element * self.key))
+        blinded_elements.map(|Blinded(blinded_element)| Evaluated(blinded_element * self.key))
     }
 }
 
@@ -134,17 +138,17 @@ impl<S: Suite> Server<S, mode::Verifiable> {
     #[allow(clippy::type_complexity)]
     pub fn evaluate<const N: usize>(
         &self,
-        blinded_elements: [Blind<S::Group>; N],
+        blinded_elements: [Blinded<S::Group>; N],
         rng: &mut impl RngCore,
     ) -> ([Evaluated<S::Group>; N], Proof<<S::Group as Group>::Scalar>) {
         let evaluated_elements =
-            blinded_elements.map(|Blind(blinded_element)| Evaluated(blinded_element * self.key));
+            blinded_elements.map(|Blinded(blinded_element)| Evaluated(blinded_element * self.key));
         let verifying_key = self.verifying_key();
         let proof = generate_proof::<N, S, mode::Verifiable>(
             self.key,
             S::Group::generator(),
             verifying_key.0,
-            blinded_elements.map(|Blind(b)| b),
+            blinded_elements.map(|Blinded(b)| b),
             evaluated_elements.map(|Evaluated(e)| e),
             rng,
         );
@@ -162,7 +166,7 @@ impl<S: Suite> Server<S, mode::Partial> {
     #[allow(clippy::type_complexity)]
     pub fn evaluate<const N: usize>(
         &self,
-        blinded_elements: [Blind<S::Group>; N],
+        blinded_elements: [Blinded<S::Group>; N],
         info: Input<'_>,
         rng: &mut impl RngCore,
     ) -> Result<([Evaluated<S::Group>; N], Proof<<S::Group as Group>::Scalar>), UndefinedInverse>
@@ -177,7 +181,7 @@ impl<S: Suite> Server<S, mode::Partial> {
         let t_inv = t.invert().into_option().ok_or(UndefinedInverse)?;
 
         let evaluated_elements =
-            blinded_elements.map(|Blind(blinded_element)| Evaluated(blinded_element * t_inv));
+            blinded_elements.map(|Blinded(blinded_element)| Evaluated(blinded_element * t_inv));
 
         let tweaked_key = S::Group::mul_by_generator(&t);
         let proof = generate_proof::<N, S, mode::Partial>(
@@ -185,7 +189,7 @@ impl<S: Suite> Server<S, mode::Partial> {
             S::Group::generator(),
             tweaked_key,
             evaluated_elements.map(|Evaluated(e)| e),
-            blinded_elements.map(|Blind(b)| b),
+            blinded_elements.map(|Blinded(b)| b),
             rng,
         );
 

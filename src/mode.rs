@@ -7,7 +7,7 @@
 
 use group::Group;
 
-use crate::{Blind, Input, VerifyingKey};
+use crate::{Blinded, Input, VerifyingKey};
 
 /// The basic (`OPRF`) mode of operation.
 ///
@@ -83,7 +83,7 @@ pub(crate) struct VerifyingPayload<const N: usize, E> {
     /// The verifying_key of the server.
     pub verifying_key: VerifyingKey<E>,
     /// The blinded element.
-    pub blinded_elements: [Blind<E>; N],
+    pub blinded_elements: [Blinded<E>; N],
 }
 
 /// Extra payload the client needs to run the protocol when proof evaluation with shared info is
@@ -92,7 +92,7 @@ pub(crate) struct PartialPayload<'a, const N: usize, E> {
     /// The verifying_key of the server.
     pub verifying_key: VerifyingKey<E>,
     /// The blinded element.
-    pub blinded_elements: [Blind<E>; N],
+    pub blinded_elements: [Blinded<E>; N],
     /// The shared info.
     pub info: Input<'a>,
 }

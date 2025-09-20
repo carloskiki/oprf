@@ -1,5 +1,14 @@
 //! Implementation of the Oblivious Pseudorandom Function (OPRF) protocol defined in
 //! [RFC 9497](https://www.rfc-editor.org/rfc/rfc9497.html).
+//!
+//! # Usage
+//!
+//! Usage of this crate depends on whether you want to [implement an OPRF ciphersuite][oprf-suite], or use
+//! an already existing one as a [`client`] or [`server`].
+//!
+//! ## Implementing a ciphersuite
+//! 
+//! Ciphersuites implementers only need to implement the [`Suite`] trait. That's it.
 
 #![no_std]
 
@@ -53,7 +62,7 @@ pub trait Suite {
 ///
 /// This is a simple wrapper to help prevent mix-ups bewteen blinded, evaluated, and key elements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Blind<E>(pub E);
+pub struct Blinded<E>(pub E);
 
 /// An evaluated element.
 ///

@@ -19,7 +19,7 @@ Implementation of the Oblivious Pseudo Random Function (OPRF) protocol defined i
 
 ## What is an OPRF?
 
-The introduction to RFC 9497 puts it best:
+The introduction of RFC 9497 puts it best:
 
 > A Pseudorandom Function (PRF) `F(k, x)` is an efficiently computable function taking a private key
 `k` and a value `x` as input. This function is pseudorandom if the keyed function `K(_) = F(k, _)` is
@@ -39,13 +39,6 @@ The scope of RFC 9497 and this crate covers three types of OPRFs:
 
 ## TODO
 
-- [x] Implement `Error` for error types.
-- [x] Bound Group serialization to `u16::MAX`.
-- [x] Proof serialization.
-- [x] Batch implementation.
-- [x] Test vectors.
-- [x] CI
-- [ ] Make all CI pass.
 - [ ] Main crate documentation (100% coverage).
 - [ ] Benchmarks.
-- [ ] Publish.
+- [ ] Examples.
